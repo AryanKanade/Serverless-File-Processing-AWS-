@@ -18,7 +18,7 @@ An event-driven, serverless file processing architecture built using **AWS Cloud
 
 - **AWS CloudFormation** — Infrastructure as Code (IaC).
 - **Amazon S3** — Encrypted file storage with public access blocked.
-- **AWS Lambda** — Event-driven processing using Python 3.12.
+- **AWS Lambda** — Event-driven processing using yaml.
 - **Amazon VPC** — Isolated network with public and private subnets.
 - **NAT Gateway & Internet Gateway** — Outbound network connectivity.
 - **S3 Gateway VPC Endpoint** — Private access to S3.
@@ -38,6 +38,7 @@ An event-driven, serverless file processing architecture built using **AWS Cloud
 
 ```text
 .
+├── /screenshot
 ├── template.yaml
 ├── architecture-diagram.png
 └── README.md
@@ -49,6 +50,4 @@ An event-driven, serverless file processing architecture built using **AWS Cloud
 2. Confirm that the stack is created successfully.
 3. Upload a test file to the S3 bucket.
 4. Verify Lambda execution, the processed metadata output, and the SNS email notification.
-5. Confirm the email subscription if prompted by AWS SNS.
-
-**Note:** Update the template parameters, resource names, and email configuration as required for your environment.
+5. Conformed the email subscription.
