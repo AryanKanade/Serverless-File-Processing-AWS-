@@ -1,5 +1,3 @@
-# Serverless-File-Processing-AWS-
-
 # Event-Driven Serverless File Processing on AWS
 
 An event-driven, serverless file processing architecture built using **AWS CloudFormation**, Amazon S3, AWS Lambda, Amazon VPC, and Amazon SNS.
