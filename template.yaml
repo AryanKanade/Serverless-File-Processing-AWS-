@@ -145,6 +145,7 @@ Resources:
   # The notification that triggers Lambda is added in Step 4.
   FileBucket:
     Type: AWS::S3::Bucket
+    DependsOn: LambdaInvokePermission
     Properties:
       BucketName: !Sub ta2-file-processing-${AWS::AccountId}-${AWS::Region}
       BucketEncryption:
@@ -156,6 +157,16 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+      # Trigger Lambda only for new files under uploads/ (prevents an infinite loop)
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt ProcessingFunction.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: uploads/
 
   # --- SNS Topic + Email Subscription ---
   FileProcessingTopic:
@@ -199,3 +210,120 @@ Resources:
                 Effect: Allow
                 Action: sns:Publish
                 Resource: !Ref FileProcessingTopic
+
+  # ==========================================================
+  # STEP 4: LAMBDA FUNCTION + PERMISSION
+  # ==========================================================
+
+  # --- Security Group for the Lambda (allows outbound traffic only) ---
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for the TA2 processing Lambda
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: TA2-Lambda-SG
+
+  # --- The Lambda function, deployed in the PRIVATE subnet ---
+  ProcessingFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: TA2-FileProcessor
+      Runtime: python3.12
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 128
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref FileProcessingTopic
+      VpcConfig:
+        SubnetIds:
+          - !Ref PrivateSubnet
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import urllib.parse
+          from datetime import datetime, timezone
+
+          import boto3
+
+          s3 = boto3.client("s3")
+          sns = boto3.client("sns")
+
+
+          def lambda_handler(event, context):
+              topic_arn = os.environ["SNS_TOPIC_ARN"]
+
+              # An S3 event can contain more than one record, so we loop over them
+              for record in event["Records"]:
+                  bucket = record["s3"]["bucket"]["name"]
+                  key = urllib.parse.unquote_plus(record["s3"]["object"]["key"])
+
+                  # Read the details (metadata) of the uploaded file
+                  info = s3.head_object(Bucket=bucket, Key=key)
+                  size = info["ContentLength"]
+                  content_type = info.get("ContentType", "unknown")
+
+                  # Build the processed metadata log
+                  log = {
+                      "bucket": bucket,
+                      "key": key,
+                      "size_bytes": size,
+                      "content_type": content_type,
+                      "processed_at": datetime.now(timezone.utc).isoformat(),
+                  }
+
+                  # Write the log back to S3 under processed/ (NOT uploads/, to avoid a loop)
+                  log_key = "processed/" + key.split("/")[-1] + ".json"
+                  s3.put_object(
+                      Bucket=bucket,
+                      Key=log_key,
+                      Body=json.dumps(log, indent=2),
+                      ContentType="application/json",
+                  )
+
+                  # Send the summary to the SNS topic (this becomes the email)
+                  message = (
+                      "File processed successfully!\n\n"
+                      "Bucket: " + bucket + "\n"
+                      "File: " + key + "\n"
+                      "Size: " + str(size) + " bytes\n"
+                      "Type: " + content_type + "\n"
+                      "Log written to: " + log_key
+                  )
+                  sns.publish(
+                      TopicArn=topic_arn,
+                      Subject="TA2: File processed - " + key.split("/")[-1],
+                      Message=message,
+                  )
+
+              return {"statusCode": 200, "body": "Done"}
+
+  # --- Resource-based policy: lets S3 invoke the Lambda ---
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ProcessingFunction
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub arn:aws:s3:::ta2-file-processing-${AWS::AccountId}-${AWS::Region}
+
+Outputs:
+  BucketName:
+    Description: Upload test files into the uploads/ folder of this bucket
+    Value: !Ref FileBucket
+  SNSTopicArn:
+    Description: SNS topic that sends the email alerts
+    Value: !Ref FileProcessingTopic
+  LambdaFunctionName:
+    Description: Processing Lambda function
+    Value: !Ref ProcessingFunction
